@@ -4,7 +4,7 @@ use clap::{Parser, ValueEnum};
 use iracing_mcp_server::{adapter, mcp, transport};
 use tracing::info;
 
-use adapter::{AdapterRef, StubAdapter};
+use adapter::{AdapterRef, SdkAdapter};
 
 #[derive(Debug, Clone, ValueEnum)]
 enum TransportKind {
@@ -15,10 +15,10 @@ enum TransportKind {
 #[derive(Debug, Parser)]
 #[command(author, version, about = "iRacing MCP server skeleton")]
 struct Cli {
-    #[arg(long, value_enum, default_value = "stdio")]
+    #[arg(long, value_enum, default_value = "http")]
     transport: TransportKind,
 
-    #[arg(long, default_value = "127.0.0.1:8765")]
+    #[arg(long, default_value = "0.0.0.0:8765")]
     bind: String,
 }
 
@@ -29,8 +29,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let cli = Cli::parse();
-    let adapter: AdapterRef = Arc::new(StubAdapter::default());
+    let adapter: AdapterRef = Arc::new(SdkAdapter);
     let state = mcp::ServerState::new(adapter);
+
+    let startup_message = match &cli.transport {
+        TransportKind::Stdio => {
+            "iracing-mcp-server running (transport=stdio)".to_string()
+        }
+        TransportKind::Http => {
+            format!("iracing-mcp-server running (transport=http, bind={})", cli.bind)
+        }
+    };
+    // Always print startup confirmation so operators can verify the process is live
+    // even when RUST_LOG filters suppress tracing output.
+    eprintln!("{startup_message}");
 
     match cli.transport {
         TransportKind::Stdio => {

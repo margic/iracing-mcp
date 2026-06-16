@@ -239,6 +239,21 @@ Notes:
 | M4 — Composite + polish | `replay_show_window`, error taxonomy, eligibility pre-checks, caching | Example use case (§6) runs end-to-end |
 | M5 — Integration tests | Automated agent-driven tests against live iRacing | See [TESTING.md](TESTING.md) |
 
+### 7.1 Status audit (2026-06-16)
+
+- [x] M0 complete.
+  Evidence: live `replay_get_state` and replay control work through the SDK adapter and broadcast path.
+- [x] M1 complete.
+  Evidence: all read tools are exposed and passing transport tests.
+- [x] M2 complete.
+  Evidence: `replay_set_playback`, `replay_seek_frame`, `replay_seek_session_time`, and `replay_search_event` all verify and pass live tests.
+- [x] M3 complete.
+  Evidence: `camera_focus` and `camera_set_state` are implemented with telemetry verification and pass live tests.
+- [x] M4 complete.
+  Evidence: `replay_show_window` is implemented, replay/camera eligibility pre-checks are enforced, verification timeout responses now return explicit MCP error codes (`timeout`), and session YAML reads are cached by `session_info_update`.
+- [x] M5 complete.
+  Evidence: `cargo test -p iracing-mcp-server -- --include-ignored` passed with live suite (3/3).
+
 ## 8. Risks & mitigations
 
 - **Out-of-car constraint** → eligibility pre-check + `wrong_mode` error (§3.3).
