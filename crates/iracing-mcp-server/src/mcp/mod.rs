@@ -1266,43 +1266,31 @@ fn parse_tool_args<T: for<'de> Deserialize<'de>>(
 }
 
 fn tool_ok(id: Option<Value>, data: impl Serialize) -> JsonRpcResponse {
-    ok(
+    build_tool_result(
         id,
         json!({
-            "content": [
-                {
-                    "type": "json",
-                    "json": {
-                        "ok": true,
-                        "data": data,
-                        "warnings": [],
-                        "error": null
-                    }
-                }
-            ]
+            "ok": true,
+            "data": data,
+            "warnings": [],
+            "error": null
         }),
+        false,
     )
 }
 
 fn tool_err(id: Option<Value>, code: &str, message: &str) -> JsonRpcResponse {
-    ok(
+    build_tool_result(
         id,
         json!({
-            "content": [
-                {
-                    "type": "json",
-                    "json": {
-                        "ok": false,
-                        "data": null,
-                        "warnings": [],
-                        "error": {
-                            "code": code,
-                            "message": message
-                        }
-                    }
-                }
-            ]
+            "ok": false,
+            "data": null,
+            "warnings": [],
+            "error": {
+                "code": code,
+                "message": message
+            }
         }),
+        true,
     )
 }
 
@@ -1312,23 +1300,34 @@ fn tool_verification_err(
     message: &str,
     data: Value,
 ) -> JsonRpcResponse {
+    build_tool_result(
+        id,
+        json!({
+            "ok": false,
+            "data": data,
+            "warnings": [],
+            "error": {
+                "code": code,
+                "message": message
+            }
+        }),
+        true,
+    )
+}
+
+fn build_tool_result(id: Option<Value>, payload: Value, is_error: bool) -> JsonRpcResponse {
+    let text = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
     ok(
         id,
         json!({
             "content": [
                 {
-                    "type": "json",
-                    "json": {
-                        "ok": false,
-                        "data": data,
-                        "warnings": [],
-                        "error": {
-                            "code": code,
-                            "message": message
-                        }
-                    }
+                    "type": "text",
+                    "text": text
                 }
-            ]
+            ],
+            "structuredContent": payload,
+            "isError": is_error
         }),
     )
 }

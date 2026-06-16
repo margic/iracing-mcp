@@ -25,7 +25,10 @@ async fn mcp_call(name: &str, arguments: Value) -> Value {
     assert_eq!(res.status(), StatusCode::OK);
     let bytes = to_bytes(res.into_body(), 1024 * 1024).await.unwrap();
     let json: Value = serde_json::from_slice(&bytes).unwrap();
-    json["result"]["content"][0]["json"]["data"].clone()
+    assert_eq!(json["result"]["content"][0]["type"], Value::String("text".into()));
+    assert!(json["result"]["content"][0]["text"].is_string());
+    assert_eq!(json["result"]["isError"], Value::Bool(false));
+    json["result"]["structuredContent"]["data"].clone()
 }
 
 #[tokio::test]
@@ -110,9 +113,9 @@ async fn http_mcp_initialize_and_tools_call_work() {
         .expect("read body");
     let call_json: Value = serde_json::from_slice(&call_body).expect("json body");
 
-    assert_eq!(call_json["result"]["content"][0]["type"], "json");
+    assert_eq!(call_json["result"]["content"][0]["type"], "text");
     assert_eq!(
-        call_json["result"]["content"][0]["json"]["data"]["connected"],
+        call_json["result"]["structuredContent"]["data"]["connected"],
         Value::Bool(true)
     );
 }
@@ -151,7 +154,7 @@ async fn http_mcp_replay_tools_work() {
         .expect("read body");
     let state_json: Value = serde_json::from_slice(&state_body).expect("json body");
     assert_eq!(
-        state_json["result"]["content"][0]["json"]["data"]["replayPlaySpeed"],
+        state_json["result"]["structuredContent"]["data"]["replayPlaySpeed"],
         Value::from(1)
     );
 
@@ -187,15 +190,15 @@ async fn http_mcp_replay_tools_work() {
     let playback_json: Value = serde_json::from_slice(&playback_body).expect("json body");
 
     assert_eq!(
-        playback_json["result"]["content"][0]["json"]["data"]["verified"],
+        playback_json["result"]["structuredContent"]["data"]["verified"],
         Value::Bool(true)
     );
     assert_eq!(
-        playback_json["result"]["content"][0]["json"]["data"]["observed"]["replayPlaySpeed"],
+        playback_json["result"]["structuredContent"]["data"]["observed"]["replayPlaySpeed"],
         Value::from(0)
     );
     assert_eq!(
-        playback_json["result"]["content"][0]["json"]["data"]["observed"]["isReplayPlaying"],
+        playback_json["result"]["structuredContent"]["data"]["observed"]["isReplayPlaying"],
         Value::Bool(false)
     );
 }
@@ -238,19 +241,19 @@ async fn http_mcp_camera_and_timeline_tools_work() {
         .expect("read body");
     let camera_json: Value = serde_json::from_slice(&camera_body).expect("json body");
     assert_eq!(
-        camera_json["result"]["content"][0]["json"]["data"]["verified"],
+        camera_json["result"]["structuredContent"]["data"]["verified"],
         Value::Bool(true)
     );
     assert_eq!(
-        camera_json["result"]["content"][0]["json"]["data"]["observed"]["camCarIdx"],
+        camera_json["result"]["structuredContent"]["data"]["observed"]["camCarIdx"],
         Value::from(12)
     );
     assert_eq!(
-        camera_json["result"]["content"][0]["json"]["data"]["observed"]["camGroupNumber"],
+        camera_json["result"]["structuredContent"]["data"]["observed"]["camGroupNumber"],
         Value::from(3)
     );
     assert_eq!(
-        camera_json["result"]["content"][0]["json"]["data"]["observed"]["camCameraNumber"],
+        camera_json["result"]["structuredContent"]["data"]["observed"]["camCameraNumber"],
         Value::from(2)
     );
 
@@ -287,11 +290,11 @@ async fn http_mcp_camera_and_timeline_tools_work() {
         .expect("read body");
     let seek_json: Value = serde_json::from_slice(&seek_body).expect("json body");
     assert_eq!(
-        seek_json["result"]["content"][0]["json"]["data"]["verified"],
+        seek_json["result"]["structuredContent"]["data"]["verified"],
         Value::Bool(true)
     );
     assert_eq!(
-        seek_json["result"]["content"][0]["json"]["data"]["observed"]["replaySessionNum"],
+        seek_json["result"]["structuredContent"]["data"]["observed"]["replaySessionNum"],
         Value::from(0)
     );
 
@@ -328,7 +331,7 @@ async fn http_mcp_camera_and_timeline_tools_work() {
         .expect("read body");
     let seek_frame_json: Value = serde_json::from_slice(&seek_frame_body).expect("json body");
     assert_eq!(
-        seek_frame_json["result"]["content"][0]["json"]["data"]["verified"],
+        seek_frame_json["result"]["structuredContent"]["data"]["verified"],
         Value::Bool(true)
     );
 
@@ -364,7 +367,7 @@ async fn http_mcp_camera_and_timeline_tools_work() {
     let search_event_json: Value =
         serde_json::from_slice(&search_event_body).expect("json body");
     assert_eq!(
-        search_event_json["result"]["content"][0]["json"]["data"]["verified"],
+        search_event_json["result"]["structuredContent"]["data"]["verified"],
         Value::Bool(true)
     );
 
@@ -400,11 +403,11 @@ async fn http_mcp_camera_and_timeline_tools_work() {
         .expect("read body");
     let set_state_json: Value = serde_json::from_slice(&set_state_body).expect("json body");
     assert_eq!(
-        set_state_json["result"]["content"][0]["json"]["data"]["verified"],
+        set_state_json["result"]["structuredContent"]["data"]["verified"],
         Value::Bool(true)
     );
     assert_eq!(
-        set_state_json["result"]["content"][0]["json"]["data"]["observed"]["camCameraState"],
+        set_state_json["result"]["structuredContent"]["data"]["observed"]["camCameraState"],
         Value::from(12)
     );
 
@@ -443,11 +446,11 @@ async fn http_mcp_camera_and_timeline_tools_work() {
         .expect("read body");
     let show_window_json: Value = serde_json::from_slice(&show_window_body).expect("json body");
     assert_eq!(
-        show_window_json["result"]["content"][0]["json"]["data"]["verified"],
+        show_window_json["result"]["structuredContent"]["data"]["verified"],
         Value::Bool(true)
     );
     assert_eq!(
-        show_window_json["result"]["content"][0]["json"]["data"]["finalState"]["camCarIdx"],
+        show_window_json["result"]["structuredContent"]["data"]["finalState"]["camCarIdx"],
         Value::from(7)
     );
 }
@@ -489,4 +492,50 @@ async fn http_mcp_m1_read_tools_work() {
     // resolve_driver � car number
     let rd3 = mcp_call("resolve_driver", json!({ "query": "7" })).await;
     assert_eq!(rd3["bestMatch"]["carIdx"], Value::Number(7.into()));
+}
+
+#[tokio::test]
+async fn http_mcp_tool_errors_use_text_and_structured_content() {
+    let state = mcp::ServerState::new(std::sync::Arc::new(adapter::StubAdapter::default()));
+    let app = transport::http::build_router(state);
+
+    let bad_req = json!({
+        "jsonrpc": "2.0",
+        "id": 9,
+        "method": "tools/call",
+        "params": {
+            "name": "camera_focus",
+            "arguments": {}
+        }
+    });
+
+    let bad_res = app
+        .oneshot(
+            Request::builder()
+                .uri("/mcp")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(bad_req.to_string()))
+                .expect("valid request"),
+        )
+        .await
+        .expect("router response");
+
+    assert_eq!(bad_res.status(), StatusCode::OK);
+    let bad_body = to_bytes(bad_res.into_body(), 1024 * 1024)
+        .await
+        .expect("read body");
+    let bad_json: Value = serde_json::from_slice(&bad_body).expect("json body");
+
+    assert_eq!(bad_json["result"]["content"][0]["type"], Value::String("text".into()));
+    assert!(bad_json["result"]["content"][0]["text"].is_string());
+    assert_eq!(bad_json["result"]["isError"], Value::Bool(true));
+    assert_eq!(
+        bad_json["result"]["structuredContent"]["ok"],
+        Value::Bool(false)
+    );
+    assert_eq!(
+        bad_json["result"]["structuredContent"]["error"]["code"],
+        Value::String("invalid_arguments".into())
+    );
 }

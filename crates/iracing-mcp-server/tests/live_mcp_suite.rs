@@ -189,10 +189,7 @@ async fn call_tool(app: axum::Router, name: &str, arguments: Value) -> Value {
     let json: Value = serde_json::from_slice(&body).expect("json body");
     let payload = json
         .get("result")
-        .and_then(|v| v.get("content"))
-        .and_then(Value::as_array)
-        .and_then(|arr| arr.first())
-        .and_then(|v| v.get("json"))
+        .and_then(|v| v.get("structuredContent"))
         .cloned()
         .unwrap_or_else(|| {
             panic!(
