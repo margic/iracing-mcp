@@ -394,7 +394,7 @@ async fn tools_call(state: &ServerState, id: Option<Value>, params: Value) -> Js
             Err(e) => tool_err(id, error_code(&e), &e.to_string()),
         },
         "get_roster" => {
-            let args: GetRosterArgs = parse_tool_args(&params, "get_roster")
+            let args: GetRosterArgs = parse_tool_args(&id, &params, "get_roster")
                 .unwrap_or(GetRosterArgs { include_spectators: false, include_pace_car: false });
             match state.adapter.get_roster(args.include_spectators, args.include_pace_car).await {
                 Ok(roster) => tool_ok(id, roster),
@@ -406,7 +406,7 @@ async fn tools_call(state: &ServerState, id: Option<Value>, params: Value) -> Js
             Err(e) => tool_err(id, error_code(&e), &e.to_string()),
         },
         "get_standings" => {
-            let args: GetStandingsArgs = parse_tool_args(&params, "get_standings")
+            let args: GetStandingsArgs = parse_tool_args(&id, &params, "get_standings")
                 .unwrap_or(GetStandingsArgs { session_num: None });
             match state.adapter.get_standings(args.session_num).await {
                 Ok(standings) => tool_ok(id, standings),
@@ -414,7 +414,7 @@ async fn tools_call(state: &ServerState, id: Option<Value>, params: Value) -> Js
             }
         }
         "resolve_driver" => {
-            let args: ResolveDriverArgs = match parse_tool_args(&params, "resolve_driver") {
+            let args: ResolveDriverArgs = match parse_tool_args(&id, &params, "resolve_driver") {
                 Ok(a) => a,
                 Err(r) => return r,
             };
@@ -432,7 +432,7 @@ async fn replay_set_playback(
     id: Option<Value>,
     params: Value,
 ) -> JsonRpcResponse {
-    let args: ReplaySetPlaybackArgs = match parse_tool_args(&params, "replay_set_playback") {
+    let args: ReplaySetPlaybackArgs = match parse_tool_args(&id, &params, "replay_set_playback") {
         Ok(args) => args,
         Err(response) => return response,
     };
@@ -524,7 +524,7 @@ async fn replay_seek_session_time(
     id: Option<Value>,
     params: Value,
 ) -> JsonRpcResponse {
-    let args: ReplaySeekSessionTimeArgs = match parse_tool_args(&params, "replay_seek_session_time") {
+    let args: ReplaySeekSessionTimeArgs = match parse_tool_args(&id, &params, "replay_seek_session_time") {
         Ok(args) => args,
         Err(response) => return response,
     };
@@ -608,7 +608,7 @@ async fn camera_focus(
     id: Option<Value>,
     params: Value,
 ) -> JsonRpcResponse {
-    let args: CameraFocusArgs = match parse_tool_args(&params, "camera_focus") {
+    let args: CameraFocusArgs = match parse_tool_args(&id, &params, "camera_focus") {
         Ok(args) => args,
         Err(response) => return response,
     };
@@ -697,7 +697,7 @@ async fn replay_seek_frame(
     id: Option<Value>,
     params: Value,
 ) -> JsonRpcResponse {
-    let args: ReplaySeekFrameArgs = match parse_tool_args(&params, "replay_seek_frame") {
+    let args: ReplaySeekFrameArgs = match parse_tool_args(&id, &params, "replay_seek_frame") {
         Ok(args) => args,
         Err(response) => return response,
     };
@@ -783,7 +783,7 @@ async fn replay_search_event(
     id: Option<Value>,
     params: Value,
 ) -> JsonRpcResponse {
-    let args: ReplaySearchEventArgs = match parse_tool_args(&params, "replay_search_event") {
+    let args: ReplaySearchEventArgs = match parse_tool_args(&id, &params, "replay_search_event") {
         Ok(args) => args,
         Err(response) => return response,
     };
@@ -859,7 +859,7 @@ async fn replay_show_window(
     id: Option<Value>,
     params: Value,
 ) -> JsonRpcResponse {
-    let args: ReplayShowWindowArgs = match parse_tool_args(&params, "replay_show_window") {
+    let args: ReplayShowWindowArgs = match parse_tool_args(&id, &params, "replay_show_window") {
         Ok(args) => args,
         Err(response) => return response,
     };
@@ -1107,7 +1107,7 @@ async fn camera_set_state(
     id: Option<Value>,
     params: Value,
 ) -> JsonRpcResponse {
-    let args: CameraSetStateArgs = match parse_tool_args(&params, "camera_set_state") {
+    let args: CameraSetStateArgs = match parse_tool_args(&id, &params, "camera_set_state") {
         Ok(args) => args,
         Err(response) => return response,
     };
@@ -1252,13 +1252,14 @@ fn ensure_out_of_car(id: Option<Value>, replay_state: &ReplayState) -> Result<()
 }
 
 fn parse_tool_args<T: for<'de> Deserialize<'de>>(
+    id: &Option<Value>,
     params: &Value,
     tool_name: &str,
 ) -> Result<T, JsonRpcResponse> {
     let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
     serde_json::from_value(arguments).map_err(|error| {
         tool_err(
-            None,
+            id.clone(),
             "invalid_arguments",
             &format!("invalid {tool_name} arguments: {error}"),
         )
