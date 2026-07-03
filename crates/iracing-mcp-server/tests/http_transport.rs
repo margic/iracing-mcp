@@ -480,6 +480,13 @@ async fn http_mcp_m1_read_tools_work() {
     assert_eq!(st["positions"][0]["carIdx"], Value::Number(7.into()));
     assert_eq!(st["positions"][0]["position"], Value::Number(1.into()));
 
+    // get_relatives
+    let rel = mcp_call("get_relatives", json!({})).await;
+    assert_eq!(rel["basis"], Value::String("track".into()));
+    assert_eq!(rel["count"], Value::Number(2.into()));
+    assert_eq!(rel["entries"][0]["carIdx"], Value::Number(7.into()));
+    assert_eq!(rel["entries"][0]["position"], Value::Number(1.into()));
+
     // resolve_driver � exact match
     let rd = mcp_call("resolve_driver", json!({ "query": "alice driver" })).await;
     assert_eq!(rd["bestMatch"]["carIdx"], Value::Number(0.into()));

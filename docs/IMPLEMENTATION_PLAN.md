@@ -11,7 +11,7 @@ The server has two responsibilities:
 
 1. **Expose state** from iRacing telemetry and the session YAML string as structured, typed tools.
 2. **Send control commands** (replay + camera) and **verify** they took effect by reading telemetry
-   back before responding.
+  back before responding.
 
 ### 1.1 Design principles
 
@@ -174,6 +174,7 @@ Full schemas live in [TOOL_REFERENCE.md](TOOL_REFERENCE.md). Grouped by purpose:
 - `get_roster`
 - `get_camera_groups`
 - `get_standings`
+- `get_relatives`
 - `resolve_driver`
 
 **Replay control (mutating + verified)**
@@ -233,7 +234,7 @@ Notes:
 | Milestone | Scope | Exit criteria |
 | --- | --- | --- |
 | M0 — SDK adapter | Connect, read telemetry vars, read session YAML, send one broadcast | `replay_get_state` returns live values; a manual play command moves `ReplayFrameNum` |
-| M1 — Read tools | `get_session_overview`, `get_weekend_info`, `get_roster`, `get_camera_groups`, `get_standings`, `resolve_driver` | Tools return normalized structures from a live/replay session |
+| M1 — Read tools | `get_session_overview`, `get_weekend_info`, `get_roster`, `get_camera_groups`, `get_standings`, `get_relatives`, `resolve_driver` | Tools return normalized structures from a live/replay session |
 | M2 — Replay control | `replay_set_playback`, `replay_seek_frame`, `replay_seek_session_time`, `replay_search_event` with verification | Each tool returns `verified:true` against a live session |
 | M3 — Camera control | `camera_focus`, `camera_set_state` with verification | Camera vars confirm changes |
 | M4 — Composite + polish | `replay_show_window`, error taxonomy, eligibility pre-checks, caching | Example use case (§6) runs end-to-end |
@@ -243,16 +244,16 @@ Notes:
 
 - [x] M0 complete.
   Evidence: live `replay_get_state` and replay control work through the SDK adapter and broadcast path.
-- [x] M1 complete.
-  Evidence: all read tools are exposed and passing transport tests.
+- [ ] M1 in progress.
+  Evidence: existing read tools are exposed and passing transport tests, and `get_relatives` is now implemented as a live track-order and gap view computed from telemetry arrays rather than a centered anchor-based panel.
 - [x] M2 complete.
   Evidence: `replay_set_playback`, `replay_seek_frame`, `replay_seek_session_time`, and `replay_search_event` all verify and pass live tests.
 - [x] M3 complete.
   Evidence: `camera_focus` and `camera_set_state` are implemented with telemetry verification and pass live tests.
 - [x] M4 complete.
-  Evidence: `replay_show_window` is implemented, replay/camera eligibility pre-checks are enforced, verification timeout responses now return explicit MCP error codes (`timeout`), and session YAML reads are cached by `session_info_update`.
+  Evidence: `replay_show_window` is implemented with step-level verification, replay/camera eligibility pre-checks are enforced, verification timeout responses now return explicit MCP error codes (`timeout`), and session YAML reads are cached by `session_info_update`.
 - [x] M5 complete.
-  Evidence: `cargo test -p iracing-mcp-server -- --include-ignored` passed with live suite (3/3).
+  Evidence: `cargo test --test live_mcp_suite -- --ignored --nocapture` passed with the stable live suite (4/4).
 
 ## 8. Risks & mitigations
 
@@ -261,5 +262,7 @@ Notes:
 - **Slow YAML parser** → cache by session update counter (§2.3).
 - **Frame-vs-time addressing** → prefer `replay_seek_session_time`; treat frames as 60/sec
   (per `ReplayFrameNum` description in [telemetry_11_23_15.md](../iracing/telemetry_11_23_15.md#L110)).
+- **Relatives math** → compute from live `CarIdx*` arrays and return the full field; do not
+  require an anchor car or center-window assumption.
 - **Same-host requirement** → documented in the user guide; optional LAN HTTP transport for the
   agent host, but the server binary stays on the sim PC.

@@ -137,6 +137,33 @@ pub struct Standings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RelativeEntry {
+    pub position: i32,
+    pub class_position: i32,
+    pub car_idx: i32,
+    pub car_number: String,
+    pub display_name: String,
+    pub lap: i32,
+    pub lap_dist_pct: Option<f64>,
+    pub is_in_pit: bool,
+    pub gap_ahead_sec: Option<f64>,
+    pub gap_behind_sec: Option<f64>,
+    pub delta_laps: i32,
+    pub estimated_time_sec: Option<f64>,
+    pub f2_time_sec: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Relatives {
+    pub basis: String,
+    pub session_num: i32,
+    pub entries: Vec<RelativeEntry>,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DriverMatch {
     pub car_idx: i32,
     pub display_name: String,
@@ -249,5 +276,6 @@ pub trait IracingAdapter: Send + Sync {
         -> Result<Roster, AdapterError>;
     async fn get_camera_groups(&self) -> Result<CameraGroupList, AdapterError>;
     async fn get_standings(&self, session_num: Option<i32>) -> Result<Standings, AdapterError>;
+    async fn get_relatives(&self) -> Result<Relatives, AdapterError>;
     async fn resolve_driver(&self, query: &str, limit: usize) -> Result<ResolveDriverResult, AdapterError>;
 }

@@ -4,8 +4,9 @@ use async_trait::async_trait;
 
 use super::{
     AdapterError, CameraEntry, CameraGroup, CameraGroupList, DriverMatch, IracingAdapter,
-    ReplaySearchMode, ReplaySeekFrameMode, ReplayState, ResolveDriverResult, Roster, RosterEntry, SessionData, SessionOverview,
-    SessionPosition, Standings, WeekendInfo,
+    ReplaySearchMode, ReplaySeekFrameMode, ReplayState, RelativeEntry, Relatives,
+    ResolveDriverResult, Roster, RosterEntry, SessionData, SessionOverview, SessionPosition,
+    Standings, WeekendInfo,
 };
 
 #[derive(Debug)]
@@ -267,6 +268,48 @@ impl IracingAdapter for StubAdapter {
             },
         ];
         Ok(Standings { session_num: 0, session_type: "Practice".to_string(), positions })
+    }
+
+    async fn get_relatives(&self) -> Result<Relatives, AdapterError> {
+        let entries = vec![
+            RelativeEntry {
+                position: 1,
+                class_position: 1,
+                car_idx: 7,
+                car_number: "7".to_string(),
+                display_name: "Bob Racer".to_string(),
+                lap: 5,
+                lap_dist_pct: Some(0.82),
+                is_in_pit: false,
+                gap_ahead_sec: None,
+                gap_behind_sec: Some(0.842),
+                delta_laps: 0,
+                estimated_time_sec: Some(93.1),
+                f2_time_sec: Some(0.0),
+            },
+            RelativeEntry {
+                position: 2,
+                class_position: 2,
+                car_idx: 0,
+                car_number: "4".to_string(),
+                display_name: "Alice Driver".to_string(),
+                lap: 5,
+                lap_dist_pct: Some(0.77),
+                is_in_pit: false,
+                gap_ahead_sec: Some(0.842),
+                gap_behind_sec: None,
+                delta_laps: 0,
+                estimated_time_sec: Some(94.0),
+                f2_time_sec: Some(0.842),
+            },
+        ];
+
+        Ok(Relatives {
+            basis: "track".to_string(),
+            session_num: 0,
+            entries: entries.clone(),
+            count: entries.len(),
+        })
     }
 
     async fn resolve_driver(

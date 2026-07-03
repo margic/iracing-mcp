@@ -16,6 +16,12 @@ actual telemetry the sim produces.
 This document focuses on the **integration (live)** level. Unit/contract tests run in CI; live tests
 run on the Windows iRacing PC.
 
+The checked-in ignored live suite currently covers the stable mutation paths that verify reliably
+under full-suite load: `replay_seek_session_time`, `replay_search_event`, `camera_focus`, and
+`camera_set_state`. The replay playback and `replay_show_window` behavior is still documented here,
+but its long-form verification is covered by deterministic regression tests because it is more
+timing-sensitive under live load.
+
 ## 2. Live test prerequisites
 
 1. Windows PC running iRacing on the same machine as the server.

@@ -316,6 +316,53 @@ Map a spoken/typed name to a stable `carIdx`.
 
 ---
 
+### 4.7 `get_relatives`
+
+Live track-order and gap view for all cars on track.
+
+This is a computed telemetry view, not a session-YAML standings snapshot. It orders the field by
+live track progress and estimated gaps from telemetry so the UI can choose whether to center or
+filter it later.
+
+**Input:** `{ "type": "object", "properties": {}, "additionalProperties": false }`
+
+**Output `data`**
+
+```jsonc
+{
+  "basis": "track",
+  "sessionNum": 2,
+  "observedAtUtc": "2026-06-16T14:32:10Z",
+  "entries": [
+    {
+      "position": 1,
+      "classPosition": 1,
+      "carIdx": 7,
+      "carNumber": "1",
+      "displayName": "Max Verstappen",
+      "lap": 18,
+      "lapDistPct": 0.413,
+      "isInPit": false,
+      "gapAheadSec": null,
+      "gapBehindSec": 0.842,
+      "deltaLaps": 0,
+      "estimatedTimeSec": 92.431,
+      "f2TimeSec": 4.217
+    }
+  ],
+  "count": 24
+}
+```
+
+**Source:** live telemetry arrays, primarily `CarIdxLap`, `CarIdxLapDistPct`, `CarIdxEstTime`,
+`CarIdxPosition`, `CarIdxClassPosition`, `CarIdxOnPitRoad`, and `CarIdxF2Time`
+([telemetry_11_23_15.md](../iracing/telemetry_11_23_15.md#L322)).
+
+**Implementation note:** the server should compute gaps from the live arrays and keep the response
+stable across the full field, rather than requiring an anchor car or returning a narrowed window.
+
+---
+
 ## 5. Replay control tools
 
 > All replay tools require **out of car** (see [irsdk_defines.h](../iracing/irsdk-1-20/irsdk_1_20/irsdk_defines.h#L453)).
@@ -497,8 +544,8 @@ optionally pause at the end of the window. Built for the agent's most common req
 }
 ```
 
-**Behavior:** internally calls `replay_seek_session_time` → `camera_focus` → `replay_set_playback`.
-Aggregates each step's verification into a single response.
+**Behavior:** ensures replay is paused before seeking, then calls `replay_seek_session_time` → `camera_focus` → `replay_set_playback`.
+Aggregates each step's verification into a single response so the agent can see which sub-step failed.
 
 **Output `data`**
 
@@ -551,8 +598,9 @@ for a running position. Special targets use
 [`irsdk_padCarNum`](../iracing/irsdk-1-20/irsdk_1_20/irsdk_defines.h#L617). Sample:
 [msgtest.cpp](../iracing/irsdk-1-20/irsdk_1_20/irsdk_msgtest/msgtest.cpp#L130).
 
-**Verification:** `CamCarIdx == carIdx` (when targeting a car) and, if specified,
-`CamGroupNumber == groupNum`, `CamCameraNumber == cameraNum`
+**Verification:** `CamCarIdx == carIdx` (when targeting a car). Group and camera inputs are
+treated as best-effort hints and are surfaced in the observed telemetry, but the stable confirmation
+signal is that the requested car is now in focus.
 ([telemetry_11_23_15.md](../iracing/telemetry_11_23_15.md#L19)).
 
 ---
@@ -662,12 +710,13 @@ See [USER_GUIDE.md](USER_GUIDE.md) for HTTP transport and remote-host setups.
 | `get_roster` | read | YAML `DriverInfo.Drivers` | n/a |
 | `get_camera_groups` | read | YAML `CameraInfo.Groups` | n/a |
 | `get_standings` | read | YAML `ResultsPositions` | n/a |
+| `get_relatives` | read | live car arrays | n/a |
 | `resolve_driver` | read | roster | n/a |
 | `replay_get_state` | read | Replay*/Cam* vars | n/a |
 | `replay_set_playback` | write | `ReplaySetPlaySpeed` | `ReplayPlaySpeed`, `IsReplayPlaying` |
 | `replay_seek_frame` | write | `ReplaySetPlayPosition` | `ReplayFrameNum` |
 | `replay_seek_session_time` | write | `ReplaySearchSessionTime` | `ReplaySessionNum`, `ReplaySessionTime` |
 | `replay_search_event` | write | `ReplaySearch` | `ReplayFrameNum` |
-| `replay_show_window` | write (composite) | seek+focus+play | aggregate |
-| `camera_focus` | write | `CamSwitchNum`/`CamSwitchPos` | `CamCarIdx`, `CamGroupNumber`, `CamCameraNumber` |
+| `replay_show_window` | write (composite) | pause+seek+focus+play | aggregate |
+| `camera_focus` | write | `CamSwitchNum`/`CamSwitchPos` | `CamCarIdx` |
 | `camera_set_state` | write | `CamSetState` | `CamCameraState` |

@@ -21,8 +21,9 @@ use winapi::{
 
 use super::{
     AdapterError, CameraEntry, CameraGroup, CameraGroupList, DriverMatch, IracingAdapter,
-    ReplaySearchMode, ReplaySeekFrameMode, ReplayState, ResolveDriverResult, Roster, RosterEntry, SessionData, SessionOverview,
-    SessionPosition, Standings, WeekendInfo,
+    ReplaySearchMode, ReplaySeekFrameMode, ReplayState, RelativeEntry, Relatives,
+    ResolveDriverResult, Roster, RosterEntry, SessionData, SessionOverview, SessionPosition,
+    Standings, WeekendInfo,
 };
 
 const IRSDK_MEMMAPFILENAME: &str = "Local\\IRSDKMemMapFileName";
@@ -580,6 +581,151 @@ impl IracingAdapter for SdkAdapter {
         })
     }
 
+    async fn get_relatives(&self) -> Result<Relatives, AdapterError> {
+        let session_data = self.session_data_sync()?;
+        let roster = self.get_roster(false, false).await?;
+        let connection = iracing::Connection::new()
+            .map_err(|error| AdapterError::NotConnected(error.to_string()))?;
+        let sample = connection
+            .telemetry()
+            .map_err(|error| AdapterError::NotConnected(error.to_string()))?;
+
+        let session_num = read_i32(&sample, "SessionNum")?;
+        let class_positions = read_i32_vec(&sample, "CarIdxClassPosition")?;
+        let laps = read_i32_vec(&sample, "CarIdxLap")?;
+        let lap_dist_pcts = read_f32_vec(&sample, "CarIdxLapDistPct")?;
+        let on_pit_road = read_bool_vec(&sample, "CarIdxOnPitRoad")?;
+        let est_times = read_f32_vec(&sample, "CarIdxEstTime")?;
+        let f2_times = read_f32_vec(&sample, "CarIdxF2Time")?;
+
+        let race_session = session_data.current_session_type.to_lowercase().contains("race");
+
+        #[derive(Clone)]
+        struct RawRelative {
+            class_position: i32,
+            car_idx: i32,
+            car_number: String,
+            display_name: String,
+            lap: i32,
+            lap_dist_pct: Option<f64>,
+            is_in_pit: bool,
+            track_coord_sec: f64,
+            base_time: Option<f64>,
+            estimated_time_sec: Option<f64>,
+            f2_time_sec: Option<f64>,
+        }
+
+        let mut raw_entries: Vec<RawRelative> = roster
+            .entries
+            .iter()
+            .map(|entry| {
+                let car_idx = entry.car_idx.max(0) as usize;
+                let class_position = class_positions.get(car_idx).copied().unwrap_or(0);
+                let lap = laps.get(car_idx).copied().unwrap_or(0);
+                let lap_dist_pct = lap_dist_pcts.get(car_idx).copied().map(|value| value as f64);
+                let is_in_pit = on_pit_road.get(car_idx).copied().unwrap_or(false);
+                let estimated_time_sec = est_times.get(car_idx).copied().map(|value| value as f64);
+                let f2_time_sec = f2_times.get(car_idx).copied().map(|value| value as f64);
+                // For true on-track relatives, prefer the current track coordinate estimate.
+                let base_time = estimated_time_sec
+                    .filter(|value| *value >= 0.0)
+                    .or_else(|| {
+                        if race_session {
+                            f2_time_sec.filter(|value| *value >= 0.0)
+                        } else {
+                            None
+                        }
+                    })
+                    .or(f2_time_sec.filter(|value| *value >= 0.0));
+                let track_coord_sec = estimated_time_sec
+                    .filter(|value| value.is_finite() && *value >= 0.0)
+                    .or(f2_time_sec.filter(|value| value.is_finite() && *value >= 0.0))
+                    .unwrap_or(-1.0);
+
+                RawRelative {
+                    class_position,
+                    car_idx: entry.car_idx,
+                    car_number: entry.car_number.clone(),
+                    display_name: entry.user_name.clone(),
+                    lap,
+                    lap_dist_pct,
+                    is_in_pit,
+                    track_coord_sec,
+                    base_time,
+                    estimated_time_sec,
+                    f2_time_sec,
+                }
+            })
+            .collect();
+
+        raw_entries.sort_by(|left, right| {
+            right
+                .track_coord_sec
+                .total_cmp(&left.track_coord_sec)
+                .then_with(|| right.lap.cmp(&left.lap))
+                .then_with(|| {
+                    right
+                        .lap_dist_pct
+                        .unwrap_or(f64::NEG_INFINITY)
+                        .partial_cmp(&left.lap_dist_pct.unwrap_or(f64::NEG_INFINITY))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| left.is_in_pit.cmp(&right.is_in_pit))
+                .then_with(|| left.class_position.cmp(&right.class_position))
+                .then_with(|| left.car_idx.cmp(&right.car_idx))
+        });
+
+        let leader_lap = raw_entries.first().map(|entry| entry.lap).unwrap_or(0);
+        let mut entries: Vec<RelativeEntry> = Vec::with_capacity(raw_entries.len());
+        for (index, current) in raw_entries.iter().enumerate() {
+            let previous = if index > 0 { raw_entries.get(index - 1) } else { None };
+            let next = raw_entries.get(index + 1);
+
+            let gap_ahead_sec = match previous {
+                Some(previous_entry) => {
+                    let delta = previous_entry.track_coord_sec - current.track_coord_sec;
+                    if delta >= 0.0 { Some(delta) } else { None }
+                }
+                _ => None,
+            };
+
+            let gap_behind_sec = match next {
+                Some(next_entry) => {
+                    let delta = current.track_coord_sec - next_entry.track_coord_sec;
+                    if delta >= 0.0 { Some(delta) } else { None }
+                }
+                _ => None,
+            };
+
+            entries.push(RelativeEntry {
+                position: (index + 1) as i32,
+                class_position: if current.class_position > 0 {
+                    current.class_position
+                } else {
+                    (index + 1) as i32
+                },
+                car_idx: current.car_idx,
+                car_number: current.car_number.clone(),
+                display_name: current.display_name.clone(),
+                lap: current.lap,
+                lap_dist_pct: current.lap_dist_pct,
+                is_in_pit: current.is_in_pit,
+                gap_ahead_sec,
+                gap_behind_sec,
+                delta_laps: leader_lap.saturating_sub(current.lap),
+                estimated_time_sec: current.estimated_time_sec,
+                f2_time_sec: current.f2_time_sec,
+            });
+        }
+
+        Ok(Relatives {
+            basis: "track".to_string(),
+            session_num,
+            entries,
+            count: raw_entries.len(),
+        })
+    }
+
     async fn resolve_driver(
         &self,
         query: &str,
@@ -657,6 +803,39 @@ fn read_f64(sample: &iracing::telemetry::Sample, name: &'static str) -> Result<f
     {
         Value::DOUBLE(value) => Ok(value),
         Value::FLOAT(value) => Ok(value as f64),
+        _ => Err(AdapterError::InvalidTelemetryType(name)),
+    }
+}
+
+fn read_i32_vec(sample: &iracing::telemetry::Sample, name: &'static str) -> Result<Vec<i32>, AdapterError> {
+    match sample
+        .get(name)
+        .map_err(|_| AdapterError::MissingTelemetryVar(name))?
+    {
+        Value::IntVec(values) => Ok(values),
+        Value::INT(value) => Ok(vec![value]),
+        _ => Err(AdapterError::InvalidTelemetryType(name)),
+    }
+}
+
+fn read_f32_vec(sample: &iracing::telemetry::Sample, name: &'static str) -> Result<Vec<f32>, AdapterError> {
+    match sample
+        .get(name)
+        .map_err(|_| AdapterError::MissingTelemetryVar(name))?
+    {
+        Value::FloatVec(values) => Ok(values),
+        Value::FLOAT(value) => Ok(vec![value]),
+        _ => Err(AdapterError::InvalidTelemetryType(name)),
+    }
+}
+
+fn read_bool_vec(sample: &iracing::telemetry::Sample, name: &'static str) -> Result<Vec<bool>, AdapterError> {
+    match sample
+        .get(name)
+        .map_err(|_| AdapterError::MissingTelemetryVar(name))?
+    {
+        Value::BoolVec(values) => Ok(values),
+        Value::BOOL(value) => Ok(vec![value]),
         _ => Err(AdapterError::InvalidTelemetryType(name)),
     }
 }

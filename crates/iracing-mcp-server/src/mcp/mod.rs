@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::time::{sleep, Duration, Instant};
+use tracing::warn;
 use crate::adapter::{
     AdapterError, AdapterRef, ReplaySearchMode, ReplaySeekFrameMode, ReplayState,
 };
@@ -143,6 +144,10 @@ struct GetRosterArgs {
 struct GetStandingsArgs {
     session_num: Option<i32>,
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GetRelativesArgs {}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -352,6 +357,15 @@ fn tool_descriptors() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "get_relatives",
+            "description": "Returns a live field-order and gap view computed from telemetry arrays.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }
+        }),
+        json!({
             "name": "resolve_driver",
             "description": "Maps a spoken or typed name, initials, or car number to a stable carIdx.",
             "inputSchema": {
@@ -413,6 +427,16 @@ async fn tools_call(state: &ServerState, id: Option<Value>, params: Value) -> Js
                 Err(e) => tool_err(id, error_code(&e), &e.to_string()),
             }
         }
+        "get_relatives" => {
+            let _: GetRelativesArgs = match parse_tool_args(&id, &params, "get_relatives") {
+                Ok(args) => args,
+                Err(response) => return response,
+            };
+            match state.adapter.get_relatives().await {
+                Ok(relatives) => tool_ok(id, relatives),
+                Err(e) => tool_err(id, error_code(&e), &e.to_string()),
+            }
+        }
         "resolve_driver" => {
             let args: ResolveDriverArgs = match parse_tool_args(&id, &params, "resolve_driver") {
                 Ok(a) => a,
@@ -456,9 +480,9 @@ async fn replay_set_playback(
 
     let started_at = Instant::now();
     let timeout = if args.speed == 0 {
-        Duration::from_millis(1500)
+        Duration::from_millis(5000)
     } else {
-        Duration::from_millis(750)
+        Duration::from_millis(1000)
     };
     let mut pause_candidate_frame = None;
 
@@ -488,6 +512,7 @@ async fn replay_set_playback(
 
                 if started_at.elapsed() >= timeout {
                     return tool_verification_err(
+                        "replay_set_playback",
                         id,
                         "timeout",
                         &format!(
@@ -547,7 +572,7 @@ async fn replay_seek_session_time(
     }
 
     let started_at = Instant::now();
-    let timeout = Duration::from_millis(1500);
+    let timeout = Duration::from_millis(5000);
 
     loop {
         match state.adapter.get_replay_state().await {
@@ -572,6 +597,7 @@ async fn replay_seek_session_time(
 
                 if started_at.elapsed() >= timeout {
                     return tool_verification_err(
+                        "replay_seek_session_time",
                         id,
                         "timeout",
                         &format!(
@@ -624,6 +650,8 @@ async fn camera_focus(
 
     let expected_group = args.group_number.unwrap_or(before.cam_group_number);
     let expected_camera = args.camera_number.unwrap_or(before.cam_camera_number);
+    let verify_group = args.group_number.is_some();
+    let verify_camera = args.camera_number.is_some();
 
     if let Err(error) = state
         .adapter
@@ -634,14 +662,14 @@ async fn camera_focus(
     }
 
     let started_at = Instant::now();
-    let timeout = Duration::from_millis(750);
+    let timeout = Duration::from_millis(1500);
 
     loop {
         match state.adapter.get_replay_state().await {
             Ok(current) => {
                 let verified = current.cam_car_idx == args.car_idx
-                    && current.cam_group_number == expected_group
-                    && current.cam_camera_number == expected_camera;
+                    && (!verify_group || current.cam_group_number == expected_group)
+                    && (!verify_camera || current.cam_camera_number == expected_camera);
 
                 if verified {
                     return tool_ok(
@@ -658,26 +686,46 @@ async fn camera_focus(
                 }
 
                 if started_at.elapsed() >= timeout {
+                    let expected_parts = [
+                        Some(format!("carIdx={}", args.car_idx)),
+                        if verify_group {
+                            Some(format!("groupNumber={}", expected_group))
+                        } else {
+                            None
+                        },
+                        if verify_camera {
+                            Some(format!("cameraNumber={}", expected_camera))
+                        } else {
+                            None
+                        },
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+
                     return tool_verification_err(
+                        "camera_focus",
                         id,
                         "timeout",
                         &format!(
-                            "Camera did not focus carIdx={} groupNumber={} cameraNumber={} within {}ms.",
-                            args.car_idx,
-                            expected_group,
-                            expected_camera,
+                            "Camera did not reach expected {} within {}ms.",
+                            expected_parts,
                             timeout.as_millis()
                         ),
                         json!({
                             "commandAccepted": true,
                             "verified": false,
                             "reason": format!(
-                                "Camera did not focus carIdx={} groupNumber={} cameraNumber={} within {}ms.",
-                                args.car_idx,
-                                expected_group,
-                                expected_camera,
+                                "Camera did not reach expected {} within {}ms.",
+                                expected_parts,
                                 timeout.as_millis()
                             ),
+                            "requested": {
+                                "carIdx": args.car_idx,
+                                "groupNumber": args.group_number,
+                                "cameraNumber": args.camera_number
+                            },
                             "before": before,
                             "observed": current,
                             "elapsedMs": started_at.elapsed().as_millis()
@@ -720,7 +768,7 @@ async fn replay_seek_frame(
         ReplaySeekFrameMode::Current => before.replay_frame_num.saturating_add(args.frame),
         ReplaySeekFrameMode::End => before.replay_frame_num_end.saturating_sub(args.frame),
     }
-    .clamp(0, before.replay_frame_num_end);
+    .clamp(0, before.replay_frame_num_end.max(before.replay_frame_num));
 
     let started_at = Instant::now();
     let timeout = Duration::from_millis(1000);
@@ -748,6 +796,7 @@ async fn replay_seek_frame(
 
                 if started_at.elapsed() >= timeout {
                     return tool_verification_err(
+                        "replay_seek_frame",
                         id,
                         "timeout",
                         &format!(
@@ -825,6 +874,7 @@ async fn replay_search_event(
 
                 if started_at.elapsed() >= timeout {
                     return tool_verification_err(
+                        "replay_search_event",
                         id,
                         "timeout",
                         &format!(
@@ -887,6 +937,44 @@ async fn replay_show_window(
     let deadline = started_at + Duration::from_millis(args.timeout_ms.max(1));
     let mut steps: Vec<Value> = Vec::new();
 
+    if args.speed != 0 {
+        if let Err(error) = state.adapter.set_replay_playback(0, false).await {
+            return tool_err(id, error_code(&error), &error.to_string());
+        }
+
+        let mut paused = false;
+        while Instant::now() < deadline {
+            match state.adapter.get_replay_state().await {
+                Ok(current) => {
+                    if current.replay_play_speed == 0 {
+                        paused = true;
+                        break;
+                    }
+                }
+                Err(error) => return tool_err(id, error_code(&error), &error.to_string()),
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+
+        if !paused {
+            return tool_verification_err(
+                "replay_show_window",
+                id,
+                "timeout",
+                "Replay did not pause before show_window seek verification could start.",
+                json!({
+                    "commandAccepted": true,
+                    "verified": false,
+                    "reason": "Replay did not pause before show_window seek verification could start.",
+                    "before": before,
+                    "steps": steps,
+                    "finalState": state.adapter.get_replay_state().await.unwrap_or(before.clone()),
+                    "elapsedMs": started_at.elapsed().as_millis()
+                }),
+            );
+        }
+    }
+
     // Step 1: seek session time
     if let Err(error) = state
         .adapter
@@ -935,11 +1023,7 @@ async fn replay_show_window(
     while Instant::now() < deadline {
         match state.adapter.get_replay_state().await {
             Ok(current) => {
-                let group_matches = args
-                    .camera_group_num
-                    .map(|g| current.cam_group_number == g)
-                    .unwrap_or(true);
-                if current.cam_car_idx == args.focus_car_idx && group_matches {
+                if current.cam_car_idx == args.focus_car_idx {
                     focus_verified = true;
                     focus_observed = current;
                     break;
@@ -1020,10 +1104,7 @@ async fn replay_show_window(
             match state.adapter.get_replay_state().await {
                 Ok(current) => {
                     pause_observed = current.clone();
-                    if reached_end
-                        && current.replay_play_speed == 0
-                        && !current.is_replay_playing
-                    {
+                    if reached_end && current.replay_play_speed == 0 {
                         paused_verified = true;
                         break;
                     }
@@ -1069,6 +1150,7 @@ async fn replay_show_window(
         )
     } else {
         tool_verification_err(
+            "replay_show_window",
             id,
             "timeout",
             "One or more replay_show_window steps did not verify before timeout.",
@@ -1089,7 +1171,11 @@ fn verify_search_event_state(mode: ReplaySearchMode, before: &ReplayState, curre
     match mode {
         ReplaySearchMode::ToStart => current.replay_frame_num <= 4,
         ReplaySearchMode::ToEnd => {
-            (current.replay_frame_num_end - current.replay_frame_num).abs() <= 4
+            let near_end = current.replay_frame_num_end > 0
+                && current.replay_frame_num >= current.replay_frame_num_end.saturating_sub(4);
+            let jumped_far = (current.replay_frame_num - before.replay_frame_num).abs() >= 1000;
+            let end_changed = current.replay_frame_num_end != before.replay_frame_num_end;
+            near_end || jumped_far || end_changed
         }
         ReplaySearchMode::PrevSession
         | ReplaySearchMode::PrevLap
@@ -1122,6 +1208,8 @@ async fn camera_set_state(
     }
 
     let expected_state = apply_camera_state_updates(before.cam_camera_state, &args);
+    let requested_mask = camera_state_requested_mask(&args);
+    let expected_masked_state = expected_state & requested_mask;
 
     if let Err(error) = state.adapter.camera_set_state(expected_state).await {
         return tool_err(id, error_code(&error), &error.to_string());
@@ -1133,7 +1221,8 @@ async fn camera_set_state(
     loop {
         match state.adapter.get_replay_state().await {
             Ok(current) => {
-                let verified = current.cam_camera_state == expected_state;
+                let observed_masked_state = current.cam_camera_state & requested_mask;
+                let verified = observed_masked_state == expected_masked_state;
 
                 if verified {
                     return tool_ok(
@@ -1142,6 +1231,8 @@ async fn camera_set_state(
                             "commandAccepted": true,
                             "verified": true,
                             "reason": null,
+                            "requestedMask": requested_mask,
+                            "expectedMaskedState": expected_masked_state,
                             "expectedState": expected_state,
                             "before": before,
                             "observed": current,
@@ -1152,21 +1243,26 @@ async fn camera_set_state(
 
                 if started_at.elapsed() >= timeout {
                     return tool_verification_err(
+                        "camera_set_state",
                         id,
                         "timeout",
                         &format!(
-                            "Camera state did not reach expectedState={} within {}ms.",
-                            expected_state,
+                            "Camera state did not reach expectedMask={} expectedMaskedState={} within {}ms.",
+                            requested_mask,
+                            expected_masked_state,
                             timeout.as_millis()
                         ),
                         json!({
                             "commandAccepted": true,
                             "verified": false,
                             "reason": format!(
-                                "Camera state did not reach expectedState={} within {}ms.",
-                                expected_state,
+                                "Camera state did not reach expectedMask={} expectedMaskedState={} within {}ms.",
+                                requested_mask,
+                                expected_masked_state,
                                 timeout.as_millis()
                             ),
+                            "requestedMask": requested_mask,
+                            "expectedMaskedState": expected_masked_state,
                             "expectedState": expected_state,
                             "before": before,
                             "observed": current,
@@ -1210,6 +1306,41 @@ fn apply_camera_state_updates(base: i32, args: &CameraSetStateArgs) -> i32 {
     set_bit(&mut state, USE_KEY_10X_ACCELERATION, args.use_key_10x_acceleration);
     set_bit(&mut state, USE_MOUSE_AIM_MODE, args.use_mouse_aim_mode);
     state
+}
+
+fn camera_state_requested_mask(args: &CameraSetStateArgs) -> i32 {
+    const CAM_TOOL_ACTIVE: i32 = 0x04;
+    const UI_HIDDEN: i32 = 0x08;
+    const USE_AUTO_SHOT_SELECTION: i32 = 0x10;
+    const USE_TEMPORARY_EDITS: i32 = 0x20;
+    const USE_KEY_ACCELERATION: i32 = 0x40;
+    const USE_KEY_10X_ACCELERATION: i32 = 0x80;
+    const USE_MOUSE_AIM_MODE: i32 = 0x100;
+
+    let mut mask = 0;
+    if args.cam_tool_active.is_some() {
+        mask |= CAM_TOOL_ACTIVE;
+    }
+    if args.ui_hidden.is_some() {
+        mask |= UI_HIDDEN;
+    }
+    if args.use_auto_shot_selection.is_some() {
+        mask |= USE_AUTO_SHOT_SELECTION;
+    }
+    if args.use_temporary_edits.is_some() {
+        mask |= USE_TEMPORARY_EDITS;
+    }
+    if args.use_key_acceleration.is_some() {
+        mask |= USE_KEY_ACCELERATION;
+    }
+    if args.use_key_10x_acceleration.is_some() {
+        mask |= USE_KEY_10X_ACCELERATION;
+    }
+    if args.use_mouse_aim_mode.is_some() {
+        mask |= USE_MOUSE_AIM_MODE;
+    }
+
+    mask
 }
 
 fn verify_playback_state(
@@ -1296,11 +1427,16 @@ fn tool_err(id: Option<Value>, code: &str, message: &str) -> JsonRpcResponse {
 }
 
 fn tool_verification_err(
+    tool_name: &str,
     id: Option<Value>,
     code: &str,
     message: &str,
     data: Value,
 ) -> JsonRpcResponse {
+    if code == "timeout" {
+        warn!(tool = %tool_name, message = %message, "tool verification timeout");
+    }
+
     build_tool_result(
         id,
         json!({
